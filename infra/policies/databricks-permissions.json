@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadLabStream",
+      "Effect": "Allow",
+      "Action": ["kinesis:DescribeStream", "kinesis:DescribeStreamSummary", "kinesis:GetShardIterator", "kinesis:GetRecords", "kinesis:ListShards"],
+      "Resource": "arn:aws:kinesis:us-east-1:{{AWS_ACCOUNT_ID}}:stream/lab-events"
+    },
+    { "Sid": "ListRaw", "Effect": "Allow", "Action": ["s3:ListBucket", "s3:GetBucketLocation"], "Resource": "arn:aws:s3:::kinesis-lab-{{AWS_ACCOUNT_ID}}-us-east-1" },
+    { "Sid": "ReadRaw", "Effect": "Allow", "Action": ["s3:GetObject"], "Resource": "arn:aws:s3:::kinesis-lab-{{AWS_ACCOUNT_ID}}-us-east-1/raw/*" },
+    { "Sid": "SelfAssume", "Effect": "Allow", "Action": "sts:AssumeRole", "Resource": "arn:aws:iam::{{AWS_ACCOUNT_ID}}:role/kinesis-lab-databricks-role" }
+  ]
+}

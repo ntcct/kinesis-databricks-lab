@@ -1,0 +1,16 @@
+# Local settings and secrets
+lab.env
+*.key
+*.pem
+.env*
+!lab.env.example
+secrets/
+.databrickscfg
+
+# Python / test artefacts
+__pycache__/
+.pytest_cache/
+*.pyc
+spark-warehouse/
+metastore_db/
+derby.log

@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadSourceStream",
+      "Effect": "Allow",
+      "Action": ["kinesis:DescribeStream", "kinesis:DescribeStreamSummary", "kinesis:GetShardIterator", "kinesis:GetRecords", "kinesis:ListShards"],
+      "Resource": "arn:aws:kinesis:us-east-1:{{AWS_ACCOUNT_ID}}:stream/lab-events"
+    },
+    {
+      "Sid": "WriteBucket",
+      "Effect": "Allow",
+      "Action": ["s3:AbortMultipartUpload", "s3:GetBucketLocation", "s3:GetObject", "s3:ListBucket", "s3:ListBucketMultipartUploads", "s3:PutObject"],
+      "Resource": ["arn:aws:s3:::kinesis-lab-{{AWS_ACCOUNT_ID}}-us-east-1", "arn:aws:s3:::kinesis-lab-{{AWS_ACCOUNT_ID}}-us-east-1/*"]
+    },
+    {
+      "Sid": "DeliveryLogs",
+      "Effect": "Allow",
+      "Action": ["logs:PutLogEvents"],
+      "Resource": "arn:aws:logs:us-east-1:{{AWS_ACCOUNT_ID}}:log-group:/aws/kinesisfirehose/lab-events-to-s3:*"
+    }
+  ]
+}

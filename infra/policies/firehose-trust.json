@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "firehose.amazonaws.com" },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": { "aws:SourceAccount": "{{AWS_ACCOUNT_ID}}" },
+        "ArnLike": { "aws:SourceArn": "arn:aws:firehose:us-east-1:{{AWS_ACCOUNT_ID}}:deliverystream/lab-events-to-s3" }
+      }
+    }
+  ]
+}
