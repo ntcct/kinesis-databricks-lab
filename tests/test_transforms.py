@@ -71,3 +71,20 @@ def test_latest_per_device_keeps_newest_and_breaks_ties(spark):
     ))
     got = {r["device_id"]: (r["event_id"], r["status"]) for r in latest_per_device(valid_events(df)).collect()}
     assert got == {"dev-0001": ("b", "FAIL"), "dev-0002": ("d", "OK")}
+
+
+def test_site_minute_aggregates_and_touched_windows(spark):
+    from lab_transforms import site_minute_aggregates, touched_windows
+    df = valid_events(parse_events(bodies(
+        spark,
+        {**GOOD, "event_id": "a", "event_ts": "2026-10-20T04:00:05.000+00:00", "temperature_c": 20.0, "status": "OK"},
+        {**GOOD, "event_id": "b", "event_ts": "2026-10-20T04:00:55.000+00:00", "temperature_c": 30.0, "status": "WARN"},
+        {**GOOD, "event_id": "c", "event_ts": "2026-10-20T04:01:00.000+00:00", "temperature_c": 25.0, "status": "FAIL"},
+        {**GOOD, "event_id": "d", "site": "perth", "event_ts": "2026-10-20T04:00:10.000+00:00"},
+    )))
+    rows = {(r["window_start"].strftime("%H:%M"), r["site"]): r for r in site_minute_aggregates(df).collect()}
+    w = rows[("04:00", "canberra")]
+    assert (w["events"], w["avg_temperature_c"], w["max_temperature_c"], w["warn_count"], w["fail_count"]) == (2, 25.0, 30.0, 1, 0)
+    assert w["window_end"].strftime("%H:%M") == "04:01"
+    assert rows[("04:01", "canberra")]["fail_count"] == 1
+    assert set(rows) == {(r["window_start"].strftime("%H:%M"), r["site"]) for r in touched_windows(df).collect()}

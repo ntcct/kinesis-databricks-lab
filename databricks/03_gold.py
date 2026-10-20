@@ -2,8 +2,10 @@
 # MAGIC %md
 # MAGIC # 03 - Gold: windowed aggregates and latest device state
 # MAGIC Both streams use `foreachBatch` + `MERGE`, so gold is idempotent and always current:
-# MAGIC * `gold_site_minute` - streaming 1-minute windows per site (update mode), upserted on (window_start, site).
-# MAGIC   Watermark 35 min on event time covers the producer's late events (up to 30 min).
+# MAGIC * `gold_site_minute` - for each micro-batch, find the (1-minute window, site) keys it touches and
+# MAGIC   **recompute those windows from silver**, then upsert. No streaming state or watermark, so late events,
+# MAGIC   batch backfills and deletes in silver are all reflected correctly (incremental counts can't subtract
+# MAGIC   deleted rows, and drop or double-count rows that arrive via backfill).
 # MAGIC * `gold_device_status` - latest event per device, only overwritten by a newer event.
 
 # COMMAND ----------
@@ -15,34 +17,40 @@ from pyspark.sql import functions as F
 T = "workspace.kinesis_lab"
 CK = "/Volumes/workspace/kinesis_lab/checkpoints"
 
-# skipChangeCommits: ignore non-append commits on silver (e.g. DELETE/MERGE from maintenance) instead of failing
+# skipChangeCommits: ignore non-append commits on silver (e.g. DELETE/MERGE from maintenance) instead of failing.
+# Backfill MERGEs are insert-only (append), so they still flow through and trigger a recompute.
 silver = spark.readStream.option("skipChangeCommits", "true").table(f"{T}.silver_events")
 
 # COMMAND ----------
-agg = (silver.withWatermark("event_ts", "35 minutes")
-       .groupBy(F.window("event_ts", "1 minute"), "site")
-       .agg(F.count("*").alias("events"),
-            F.round(F.avg("temperature_c"), 2).alias("avg_temperature_c"),
-            F.max("temperature_c").alias("max_temperature_c"),
-            F.round(F.avg("humidity_pct"), 1).alias("avg_humidity_pct"),
-            F.sum(F.when(F.col("status") == "WARN", 1).otherwise(0)).alias("warn_count"),
-            F.sum(F.when(F.col("status") == "FAIL", 1).otherwise(0)).alias("fail_count"))
-       .select(F.col("window.start").alias("window_start"), F.col("window.end").alias("window_end"), "*")
-       .drop("window"))
-
-
 def upsert_site_minute(batch, batch_id):
-    batch.withColumn("updated_at", F.current_timestamp()).createOrReplaceTempView("u")
-    batch.sparkSession.sql(f"""
+    import sys
+    sys.path.insert(0, ROOT)
+    from lab_transforms import site_minute_aggregates, touched_windows
+    s = batch.sparkSession
+    keys = touched_windows(batch)
+    bounds = batch.agg(F.min("event_ts").alias("lo"), F.max("event_ts").alias("hi")).first()
+    if bounds["lo"] is None:
+        return
+    # Time-bounded read of silver so Delta can skip files outside the touched range
+    silver_rows = (s.table(f"{T}.silver_events")
+                   .filter(F.col("event_ts").between(F.date_trunc("minute", F.lit(bounds["lo"])),
+                                                     F.lit(bounds["hi"]) + F.expr("INTERVAL 1 MINUTE"))))
+    recomputed = (site_minute_aggregates(silver_rows)
+                  .join(keys, ["window_start", "site"], "left_semi")
+                  .withColumn("updated_at", F.current_timestamp()))
+    recomputed.createOrReplaceTempView("u")
+    s.sql(f"""
       MERGE INTO {T}.gold_site_minute t USING u s
       ON t.window_start = s.window_start AND t.site = s.site
       WHEN MATCHED THEN UPDATE SET *
       WHEN NOT MATCHED THEN INSERT *""")
 
 
-q1 = (agg.writeStream.queryName("gold_site_minute").outputMode("update")
+# New checkpoint name: the previous version was a stateful aggregation, whose state is incompatible.
+# Starting fresh re-reads silver once and recomputes every window, which also repairs earlier drift.
+q1 = (silver.writeStream.queryName("gold_site_minute")
       .foreachBatch(upsert_site_minute)
-      .option("checkpointLocation", f"{CK}/gold_site_minute")
+      .option("checkpointLocation", f"{CK}/gold_site_minute_v2")
       .trigger(availableNow=True).start())
 
 # COMMAND ----------

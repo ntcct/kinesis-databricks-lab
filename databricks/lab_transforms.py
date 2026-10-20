@@ -57,3 +57,27 @@ def latest_per_device(df: DataFrame) -> DataFrame:
     from pyspark.sql.window import Window
     w = Window.partitionBy("device_id").orderBy(F.col("event_ts").desc(), F.col("event_id").desc())
     return df.withColumn("_rn", F.row_number().over(w)).filter("_rn = 1").drop("_rn")
+
+
+def touched_windows(df: DataFrame) -> DataFrame:
+    """Distinct (window_start, site) keys of 1-minute windows that a batch of silver rows falls into."""
+    return df.select(F.date_trunc("minute", "event_ts").alias("window_start"), "site").distinct()
+
+
+def site_minute_aggregates(silver: DataFrame) -> DataFrame:
+    """Full aggregates per (1-minute window, site), computed from silver rows (no streaming state).
+
+    Recomputing touched windows from silver keeps gold correct for late events, backfills and deletes,
+    unlike incremental streaming state, which can't subtract deleted rows or accept rows past the watermark.
+    """
+    return (silver.withColumn("window_start", F.date_trunc("minute", "event_ts"))
+            .groupBy("window_start", "site")
+            .agg(F.count("*").alias("events"),
+                 F.round(F.avg("temperature_c"), 2).alias("avg_temperature_c"),
+                 F.max("temperature_c").alias("max_temperature_c"),
+                 F.round(F.avg("humidity_pct"), 1).alias("avg_humidity_pct"),
+                 F.sum(F.when(F.col("status") == "WARN", 1).otherwise(0)).alias("warn_count"),
+                 F.sum(F.when(F.col("status") == "FAIL", 1).otherwise(0)).alias("fail_count"))
+            .withColumn("window_end", F.col("window_start") + F.expr("INTERVAL 1 MINUTE"))
+            .select("window_start", "window_end", "site", "events", "avg_temperature_c", "max_temperature_c",
+                    "avg_humidity_pct", "warn_count", "fail_count"))
